@@ -1,0 +1,108 @@
+@startuml LetAITalkCallRuntimeSequence
+
+title LetAITalk - Inbound Call Runtime Flow
+autonumber
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam sequenceMessageAlign center
+skinparam responseMessageBelowArrow true
+skinparam ArrowColor #30475E
+skinparam ParticipantBorderColor #30475E
+skinparam ParticipantBackgroundColor #FFFFFF
+skinparam ActorBorderColor #30475E
+skinparam ActorBackgroundColor #FFFFFF
+skinparam LifeLineBorderColor #AAB7C4
+skinparam LifeLineBackgroundColor #FFFFFF
+skinparam BoxBorderColor #30475E
+skinparam BoxBackgroundColor #F8FAFC
+skinparam NoteBorderColor #C9B458
+skinparam NoteBackgroundColor #FFFBEA
+
+actor Caller
+participant "Telephony Provider" as Telephony
+
+box "Go Real-Time Backend" #F8FAFC
+participant "Go Edge\nWebhook + Media Gateway + Session Manager" as GoEdge
+participant "Call Event Publisher" as Publisher
+end box
+
+box "Python AI Runtime" #F8FAFC
+participant "AI Runtime\nOrchestrator + STT + Policy + LLM + Validator + TTS" as AIRuntime
+participant "Post-Call Worker" as Worker
+end box
+
+participant "AI Providers\nSTT / LLM / TTS APIs" as AIProviders
+database "Runtime State\nRedis + PostgreSQL" as DataLayer
+collections "Artifacts\nObject Storage" as Storage
+participant "Notification Service" as Notification
+actor User
+
+note right of GoEdge
+Owns:
+- inbound webhooks
+- call session lifecycle
+- media stream transport
+- low-latency audio handling
+end note
+
+note right of AIRuntime
+Owns:
+- transcript processing
+- deterministic policy checks
+- bounded LLM generation
+- response validation
+- speech synthesis coordination
+end note
+
+== 1. Call Setup ==
+
+Caller -> Telephony : dial LetAITalk number
+Telephony -> GoEdge : inbound call webhook
+GoEdge -> DataLayer : create call session\ninitialize runtime state
+GoEdge -> Telephony : answer call\naccept media stream
+Telephony -> GoEdge : open live audio stream
+
+== 2. Live Conversation Loop ==
+
+loop For each caller turn
+  Telephony -> GoEdge : caller audio frames
+  GoEdge -> AIRuntime : stream caller audio
+  AIRuntime -> AIProviders : STT request
+  AIProviders --> AIRuntime : partial / final transcript
+
+  alt Deterministic rule is sufficient
+    AIRuntime --> GoEdge : approved scripted response audio
+  else LLM response is required
+    AIRuntime -> AIProviders : LLM inference request
+    AIProviders --> AIRuntime : candidate response text
+    AIRuntime -> AIProviders : TTS synthesis request
+    AIProviders --> AIRuntime : synthesized response audio
+    AIRuntime --> GoEdge : validated assistant audio
+  end
+
+  GoEdge --> Telephony : outbound audio stream
+  Telephony --> Caller : assistant response
+  AIRuntime -> DataLayer : append transcript events\nupdate conversation state
+end
+
+== 3. Call Completion ==
+
+Telephony -> GoEdge : call completed webhook
+GoEdge -> Publisher : publish call completed event
+Publisher -> Worker : start post-call processing
+
+== 4. Post-Call Processing ==
+
+Worker -> DataLayer : save summary\nintent\naction items
+Worker -> Storage : store artifacts\nrecording references
+Worker -> Notification : send post-call update
+Notification -> User : push / SMS / WhatsApp
+
+note over DataLayer
+Redis is used for transient live session state.
+PostgreSQL remains the permanent system of record.
+end note
+
+@enduml

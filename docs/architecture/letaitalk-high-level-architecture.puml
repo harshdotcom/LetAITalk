@@ -1,0 +1,161 @@
+@startuml LetAITalkHighLevelArchitecture
+
+title LetAITalk - Platform Architecture
+top to bottom direction
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam linetype ortho
+skinparam ranksep 60
+skinparam nodesep 40
+skinparam wrapWidth 220
+skinparam ArrowColor #30475E
+skinparam PackageBorderColor #30475E
+skinparam PackageBackgroundColor #F8FAFC
+skinparam ComponentBorderColor #30475E
+skinparam ComponentBackgroundColor #FFFFFF
+skinparam DatabaseBorderColor #30475E
+skinparam DatabaseBackgroundColor #FFFFFF
+skinparam QueueBorderColor #30475E
+skinparam QueueBackgroundColor #FFFFFF
+skinparam NoteBorderColor #C9B458
+skinparam NoteBackgroundColor #FFFBEA
+
+actor Caller
+actor User
+
+package "1. Telephony Access Layer" {
+  [Assigned Number / SIP Endpoint] as Number
+  [Telephony Provider\nCall Control + Media Streaming] as TelephonyProvider
+
+  Number -[hidden]right-> TelephonyProvider
+}
+
+package "2. Real-Time Backend Edge (Go)" {
+  [Webhook Controller] as WebhookController
+  [Media Stream Gateway] as MediaGateway
+  [Call Session Manager] as SessionManager
+  [Call Event Publisher] as EventPublisher
+
+  WebhookController -[hidden]right-> MediaGateway
+  MediaGateway -[hidden]right-> SessionManager
+  SessionManager -[hidden]right-> EventPublisher
+}
+
+package "3. AI Conversation Runtime (Python)" {
+  [AI Orchestrator] as AIOrchestrator
+  [Streaming STT Adapter] as STT
+  [Conversation Policy Engine] as Policy
+  [LLM Adapter] as LLM
+  [Response Validator] as Validator
+  [Streaming TTS Adapter] as TTS
+  [Post-Call Worker] as Worker
+
+  AIOrchestrator -[hidden]right-> STT
+  STT -[hidden]right-> Policy
+  Policy -[hidden]right-> LLM
+  LLM -[hidden]right-> Validator
+  Validator -[hidden]right-> TTS
+  TTS -[hidden]down-> Worker
+}
+
+package "4. Data And State Layer" {
+  database "Redis\nLive Session State" as Redis
+  database "PostgreSQL\nSystem of Record" as Postgres
+  collections "Object Storage\nRecordings / Artifacts" as Storage
+
+  Redis -[hidden]right-> Postgres
+  Postgres -[hidden]right-> Storage
+}
+
+package "5. Control Plane" {
+  [Dashboard / Mobile App] as ClientApp
+  [Admin API] as AdminAPI
+  [Notification Service] as NotificationService
+
+  ClientApp -[hidden]right-> AdminAPI
+  AdminAPI -[hidden]right-> NotificationService
+}
+
+package "6. External AI Providers" {
+  [Speech Recognition API] as STTProvider
+  [LLM Inference API] as LLMProvider
+  [Voice Synthesis API] as TTSProvider
+
+  STTProvider -[hidden]right-> LLMProvider
+  LLMProvider -[hidden]right-> TTSProvider
+}
+
+package "7. Future Scale Path" {
+  queue "Message Bus\nNATS / Kafka / Redis Streams" as Bus
+}
+
+Caller --> Number : dials LetAITalk number
+Number --> TelephonyProvider : route inbound call
+TelephonyProvider --> WebhookController : inbound call webhook
+TelephonyProvider --> MediaGateway : caller media stream
+WebhookController --> SessionManager : create call session
+SessionManager --> Redis : initialize runtime state
+SessionManager --> Postgres : persist call metadata
+
+MediaGateway --> AIOrchestrator : stream caller audio frames
+AIOrchestrator --> STT : forward audio for recognition
+STT --> STTProvider : speech-to-text requests
+STTProvider --> STT : partial and final transcripts
+STT --> Policy : normalized transcript events
+Policy --> LLM : request generation\nwhen deterministic rules do not match
+LLM --> LLMProvider : inference requests
+LLMProvider --> LLM : candidate response
+LLM --> Validator : generated response
+Validator --> TTS : approved response text
+TTS --> TTSProvider : voice synthesis requests
+TTSProvider --> TTS : audio chunks
+TTS --> AIOrchestrator : synthesized assistant audio
+AIOrchestrator --> MediaGateway : assistant audio frames
+MediaGateway --> TelephonyProvider : outbound audio stream
+TelephonyProvider --> Caller : assistant speaks
+
+AIOrchestrator --> Redis : conversation buffer\nturn state\ninterrupt flags
+AIOrchestrator --> Postgres : transcript events\nassistant responses
+MediaGateway --> Storage : optional call recordings
+EventPublisher --> Worker : call completed event
+Worker --> Postgres : summary\nintent\naction items
+Worker --> Storage : processed artifacts
+Worker --> NotificationService : post-call update
+NotificationService --> User : push / SMS / WhatsApp
+
+User --> ClientApp : manage assistant
+ClientApp --> AdminAPI : settings, rules, logs
+AdminAPI --> Postgres : preferences and summaries
+AdminAPI --> Redis : live toggles and controls
+
+EventPublisher ..> Bus : future async transport
+AIOrchestrator ..> Bus : future worker fan-out
+Worker ..> Bus : future event publishing
+
+note right of MediaGateway
+Owns low-latency media handling,
+provider integration, and audio transport.
+end note
+
+note right of Policy
+Deterministic rules execute first.
+The LLM is used inside bounded policy,
+not as an unrestricted decision-maker.
+end note
+
+note bottom of Redis
+Redis stores only transient runtime state.
+PostgreSQL remains the permanent source of truth.
+end note
+
+legend right
+|= Line Style |= Meaning |
+| solid | MVP-critical flow |
+| dashed | scale-ready future path |
+endlegend
+
+@enduml
